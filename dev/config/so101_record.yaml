@@ -1,0 +1,75 @@
+type: gym_manipulator
+robot:
+  type: so100_follower_end_effector
+  id: so101_follower
+  calibration_dir: /Users/clementpoisson/Code/lerobot/dev/calibration
+  port: /dev/tty.usbmodem5A460824501
+  cameras:
+    top:
+      type: opencv
+      index_or_path: 0
+      height: 1080
+      width: 1920
+      fps: 30
+    wrist:
+      type: opencv
+      index_or_path: 1
+      height: 720
+      width: 1280
+      fps: 30
+  urdf_path: /Users/clementpoisson/Code/lerobot/SO-ARM100/Simulation/SO101/so101_new_calib.urdf
+  end_effector_bounds:
+    max: [0.3, 0.1, 0.12]
+    min: [0.0, -0.15, -0.03]
+  end_effector_step_sizes:
+    x: 0.01
+    y: 0.01
+    z: 0.01
+teleop:
+  type: gamepad
+  use_gripper: true
+wrapper:
+  control_mode: gamepad
+  display_cameras: true
+  add_joint_velocity_to_observation: true
+  add_current_to_observation: true
+  add_ee_pose_to_observation: true
+  crop_params_dict:
+    observation.images.top: [22, 307, 938, 1331]
+    observation.images.wrist: [0, 0, 720, 1280]
+  resize_size: [512, 512]
+  control_time_s: 60.0
+  fixed_reset_joint_positions: [0.0, 0.0, 0.0, 90.0, 0.0, 5.0]
+  reset_time_s: 5.0
+  use_gripper: true
+  gripper_quantization_threshold: null
+  gripper_penalty: -0.02
+  gripper_penalty_in_reward: false
+fps: 10
+name: SO101
+mode: record
+repo_id: SonDePoisson/so101_test_dataset
+dataset_root: /Users/clementpoisson/Code/lerobot/dev/datasets/SonDePoisson/so101_test_dataset
+task: Pick red plug and place it in slot
+num_episodes: 5
+episode: 0
+device: mps
+push_to_hub: true
+features:
+  observation.images.top:
+    type: VISUAL
+    shape: [3, 512, 512]
+  observation.images.wrist:
+    type: VISUAL
+    shape: [3, 512, 512]
+  observation.state:
+    type: STATE
+    shape: [15]
+  action:
+    type: ACTION
+    shape: [3]
+features_map:
+  observation.images.top: observation.images.top
+  observation.images.wrist: observation.images.wrist
+  observation.state: observation.state
+  action: action

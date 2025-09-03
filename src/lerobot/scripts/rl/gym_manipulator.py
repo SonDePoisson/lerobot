@@ -2238,7 +2238,7 @@ def main(cfg: EnvConfig):
 
     num_episode = 0
     successes = []
-    while num_episode < 10:
+    while num_episode < cfg.num_episodes:
         start_loop_s = time.perf_counter()
         # Sample a new random action from the robot's action space.
         new_random_action = env.action_space.sample()

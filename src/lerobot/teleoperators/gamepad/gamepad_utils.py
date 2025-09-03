@@ -359,7 +359,10 @@ class GamepadControllerHID(InputController):
         devices = hid.enumerate()
         for device in devices:
             device_name = device["product_string"]
-            if any(controller in device_name for controller in ["Logitech", "Xbox", "PS4", "PS5"]):
+            if any(
+                controller in device_name
+                for controller in ["Logitech", "Xbox", "PS4", "PS5", "Wireless Controller"]
+            ):
                 return device
 
         logging.error(
