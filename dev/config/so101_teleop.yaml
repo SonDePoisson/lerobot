@@ -1,0 +1,30 @@
+robot:
+  type: so100_follower_end_effector
+  id: so101_follower
+  calibration_dir: /Users/clementpoisson/Code/lerobot/dev/calibration
+  port: /dev/tty.usbmodem5A460824501
+  cameras:
+    top:
+      type: opencv
+      index_or_path: 0
+      height: 1080
+      width: 1920
+      fps: 30
+    wrist:
+      type: opencv
+      index_or_path: 1
+      height: 720
+      width: 1280
+      fps: 30
+  urdf_path: /Users/clementpoisson/Code/lerobot/SO-ARM100/Simulation/SO101/so101_new_calib.urdf
+  end_effector_bounds:
+    max: [0.3, 0.1, 0.12]
+    min: [0.0, -0.15, -0.03]
+  end_effector_step_sizes:
+    x: 0.01
+    y: 0.01
+    z: 0.01
+teleop:
+  type: gamepad
+  use_gripper: true
+display_data: false

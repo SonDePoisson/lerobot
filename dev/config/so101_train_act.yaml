@@ -1,0 +1,20 @@
+dataset:
+  repo_id: SonDePoisson/phospho_test_dataset
+  root: dev/datasets/SonDePoisson/phospho_test_dataset
+
+policy:
+  type: act
+  repo_id: SonDePoisson/so101_act
+  device: mps
+
+wandb:
+  enable: true
+  project: so101_training
+
+job_name: so101_act
+output_dir: outputs/train/act
+num_workers: 8
+batch_size: 16
+steps: 10000
+save_checkpoint: true
+save_freq: 5000

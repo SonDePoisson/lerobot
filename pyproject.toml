@@ -241,6 +241,11 @@ default.extend-ignore-identifiers-re = [
     "ein",
 ]
 
+[tool.uv.workspace]
+members = [
+    "dev/models/SonDePoisson/so101_act",
+]
+
 # TODO: Uncomment when ready to use
 # [tool.interrogate]
 # ignore-init-module = true
