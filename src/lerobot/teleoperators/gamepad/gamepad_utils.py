@@ -340,6 +340,9 @@ class GamepadControllerHID(InputController):
         # Button states
         self.buttons = {}
 
+        # Controller type detection
+        self._is_stadia = False
+
     def find_device(self):
         """Look for the gamepad device by vendor and product ID."""
         import hid
@@ -347,7 +350,7 @@ class GamepadControllerHID(InputController):
         devices = hid.enumerate()
         for device in devices:
             device_name = device["product_string"]
-            if any(controller in device_name for controller in ["Logitech", "Xbox", "PS4", "PS5"]):
+            if any(controller in device_name for controller in ["Logitech", "Xbox", "PS4", "PS5", "Stadia"]):
                 return device
 
         logging.error(
@@ -372,7 +375,10 @@ class GamepadControllerHID(InputController):
 
             manufacturer = self.device.get_manufacturer_string()
             product = self.device.get_product_string()
+            self._is_stadia = "Stadia" in (product or "")
             logging.info(f"Connected to {manufacturer} {product}")
+            if self._is_stadia:
+                logging.info("Stadia controller detected (Bluetooth HID)")
 
             logging.info("Gamepad controls (HID mode):")
             logging.info("  Left analog stick: Move in X-Y plane")
@@ -406,49 +412,113 @@ class GamepadControllerHID(InputController):
             return
 
         try:
-            # Read data from the gamepad
             data = self.device.read(64)
-            # Interpret gamepad data - this will vary by controller model
-            # These offsets are for the Logitech RumblePad 2
-            if data and len(data) >= 8:
-                # Normalize joystick values from 0-255 to -1.0-1.0
-                self.left_y = (data[1] - 128) / 128.0
-                self.left_x = (data[2] - 128) / 128.0
-                self.right_x = (data[3] - 128) / 128.0
-                self.right_y = (data[4] - 128) / 128.0
+            if not data:
+                return
 
-                # Apply deadzone
-                self.left_y = 0 if abs(self.left_y) < self.deadzone else self.left_y
-                self.left_x = 0 if abs(self.left_x) < self.deadzone else self.left_x
-                self.right_x = 0 if abs(self.right_x) < self.deadzone else self.right_x
-                self.right_y = 0 if abs(self.right_y) < self.deadzone else self.right_y
-
-                # Parse button states (byte 5 in the Logitech RumblePad 2)
-                buttons = data[5]
-
-                # Check if RB is pressed then the intervention flag should be set
-                self.intervention_flag = data[6] in [2, 6, 10, 14]
-
-                # Check if RT is pressed
-                self.open_gripper_command = data[6] in [8, 10, 12]
-
-                # Check if LT is pressed
-                self.close_gripper_command = data[6] in [4, 6, 12]
-
-                # Check if Y/Triangle button (bit 7) is pressed for saving
-                # Check if X/Square button (bit 5) is pressed for failure
-                # Check if A/Cross button (bit 4) is pressed for rerecording
-                if buttons & 1 << 7:
-                    self.episode_end_status = TeleopEvents.SUCCESS
-                elif buttons & 1 << 5:
-                    self.episode_end_status = TeleopEvents.FAILURE
-                elif buttons & 1 << 4:
-                    self.episode_end_status = TeleopEvents.RERECORD_EPISODE
-                else:
-                    self.episode_end_status = None
+            if self._is_stadia:
+                self._parse_stadia(data)
+            else:
+                self._parse_logitech(data)
 
         except OSError as e:
             logging.error(f"Error reading from gamepad: {e}")
+
+    def _parse_logitech(self, data):
+        """Parse HID data for Logitech RumblePad 2."""
+        if len(data) < 8:
+            return
+
+        # Normalize joystick values from 0-255 to -1.0-1.0
+        self.left_y = (data[1] - 128) / 128.0
+        self.left_x = (data[2] - 128) / 128.0
+        self.right_x = (data[3] - 128) / 128.0
+        self.right_y = (data[4] - 128) / 128.0
+
+        # Apply deadzone
+        self.left_y = 0 if abs(self.left_y) < self.deadzone else self.left_y
+        self.left_x = 0 if abs(self.left_x) < self.deadzone else self.left_x
+        self.right_x = 0 if abs(self.right_x) < self.deadzone else self.right_x
+        self.right_y = 0 if abs(self.right_y) < self.deadzone else self.right_y
+
+        # Parse button states (byte 5 in the Logitech RumblePad 2)
+        buttons = data[5]
+
+        # Check if RB is pressed then the intervention flag should be set
+        self.intervention_flag = data[6] in [2, 6, 10, 14]
+
+        # Check if RT is pressed
+        self.open_gripper_command = data[6] in [8, 10, 12]
+
+        # Check if LT is pressed
+        self.close_gripper_command = data[6] in [4, 6, 12]
+
+        # Check if Y/Triangle button (bit 7) is pressed for saving
+        # Check if X/Square button (bit 5) is pressed for failure
+        # Check if A/Cross button (bit 4) is pressed for rerecording
+        if buttons & 1 << 7:
+            self.episode_end_status = TeleopEvents.SUCCESS
+        elif buttons & 1 << 5:
+            self.episode_end_status = TeleopEvents.FAILURE
+        elif buttons & 1 << 4:
+            self.episode_end_status = TeleopEvents.RERECORD_EPISODE
+        else:
+            self.episode_end_status = None
+
+    def _parse_stadia(self, data):
+        """Parse HID data for Google Stadia controller (Bluetooth).
+
+        Stadia BT HID report (11 bytes, report_id=3):
+          byte[0] = report_id (3)
+          byte[1] = d-pad (8=neutral)
+          byte[2] = trigger flags: bit2(4)=L2 digital, bit3(8)=R2 digital
+          byte[3] = face buttons: 64=A, 32=B, 16=X, 8=Y, 4=L1, 2=R1
+          byte[4] = left stick X  (0-255, 128=center)
+          byte[5] = left stick Y  (0-255, 128=center)
+          byte[6] = right stick X (0-255, 128=center)
+          byte[7] = right stick Y (0-255, 128=center)
+          byte[8] = L2 analog (0-255)
+          byte[9] = R2 analog (0-255)
+          byte[10] = unused
+        """
+        if len(data) < 10:
+            return
+
+        # Sticks (0-255, 128=center) -> normalized -1.0 to 1.0
+        self.left_x = (data[4] - 128) / 128.0
+        self.left_y = (data[5] - 128) / 128.0
+        self.right_x = (data[6] - 128) / 128.0
+        self.right_y = (data[7] - 128) / 128.0
+
+        # Apply deadzone
+        self.left_x = 0 if abs(self.left_x) < self.deadzone else self.left_x
+        self.left_y = 0 if abs(self.left_y) < self.deadzone else self.left_y
+        self.right_x = 0 if abs(self.right_x) < self.deadzone else self.right_x
+        self.right_y = 0 if abs(self.right_y) < self.deadzone else self.right_y
+
+        # Face buttons (byte 3)
+        buttons = data[3]
+
+        # Y button (bit 3 = 8) -> SUCCESS
+        # A button (bit 6 = 64) -> FAILURE
+        # X button (bit 4 = 16) -> RERECORD
+        if buttons & 8:
+            self.episode_end_status = TeleopEvents.SUCCESS
+        elif buttons & 64:
+            self.episode_end_status = TeleopEvents.FAILURE
+        elif buttons & 16:
+            self.episode_end_status = TeleopEvents.RERECORD_EPISODE
+        else:
+            self.episode_end_status = None
+
+        # R1 (bit 1 = 2) -> intervention flag
+        self.intervention_flag = bool(buttons & 2)
+
+        # Gripper: R2 analog (byte 9) to open, L2 analog (byte 8) to close
+        # Use a threshold to convert analog trigger to digital command
+        trigger_threshold = 30
+        self.open_gripper_command = data[9] > trigger_threshold
+        self.close_gripper_command = data[8] > trigger_threshold
 
     def get_deltas(self):
         """Get the current movement deltas from gamepad state."""
