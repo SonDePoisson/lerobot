@@ -70,7 +70,9 @@ def main():
     port = os.environ["SO101_PORT"]
     urdf_path = "./SO101"
 
-    device = torch.device("mps" if torch.backends.mps.is_available() else "cuda" if torch.cuda.is_available() else "cpu")
+    device = torch.device(
+        "mps" if torch.backends.mps.is_available() else "cuda" if torch.cuda.is_available() else "cpu"
+    )
     print(f"Using device: {device}")
 
     # ── Load trained model ────────────────────────────────────────────────
@@ -210,8 +212,11 @@ def main():
             # 7. Maintain FPS
             precise_sleep(max(1.0 / FPS - (time.perf_counter() - t0), 0.0))
 
+            dt = time.perf_counter() - t0
             if step % 30 == 0:
-                print(f"Step {step}/{MAX_STEPS}")
+                print(
+                    f"Step {step}/{MAX_STEPS} | dt={dt:.3f}s ({1 / dt:.1f} FPS) | ee=({ee_action.get('ee.x', 0):.3f}, {ee_action.get('ee.y', 0):.3f}, {ee_action.get('ee.z', 0):.3f})"
+                )
 
     except KeyboardInterrupt:
         print("\nStopping inference.")

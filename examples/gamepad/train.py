@@ -32,7 +32,7 @@ OUTPUT_DIR = "outputs/train/smolvla_gamepad"
 POLICY_PATH = "lerobot/smolvla_base"
 
 STEPS = 2000  # Quick test (increase to 10_000 for full training)
-BATCH_SIZE = 2  # Small for MPS/CPU, increase on GPU (e.g. 32-64)
+BATCH_SIZE = 8  # Small for MPS/CPU, increase on GPU (e.g. 32-64)
 SAVE_FREQ = 200  # Save checkpoint every N steps
 LOG_FREQ = 10  # Log metrics every N steps
 NUM_WORKERS = 2  # Dataloader workers
@@ -63,7 +63,7 @@ def main():
             f"--batch_size={BATCH_SIZE}",
             f"--steps={STEPS}",
             f"--save_freq={SAVE_FREQ}",
-            f"--eval_freq={STEPS}",
+            f"--eval_freq={SAVE_FREQ}",
             f"--log_freq={LOG_FREQ}",
             f"--num_workers={NUM_WORKERS}",
             f"--output_dir={OUTPUT_DIR}",

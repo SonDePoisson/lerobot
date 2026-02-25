@@ -35,6 +35,8 @@ import time
 from dataclasses import dataclass
 from pathlib import Path
 
+import numpy as np
+
 from lerobot.cameras.opencv.configuration_opencv import OpenCVCameraConfig
 from lerobot.configs.types import FeatureType, PipelineFeatureType, PolicyFeature
 from lerobot.datasets.lerobot_dataset import LeRobotDataset
@@ -81,6 +83,10 @@ RESUME = True
 
 # Initial position (degrees / 0-100 for gripper).
 # Generate with: python examples/gamepad/dump_positions.py
+TRIM_IDLE = True  # Trim idle frames from beginning/end of each episode
+TRIM_MOTION_THRESHOLD = 0.001  # 1mm movement threshold
+TRIM_PADDING_FRAMES = 5  # Keep N frames before/after movement
+
 INITIAL_POSITION = {
     "shoulder_pan.pos": 0.0,
     "shoulder_lift.pos": 0.0,
@@ -164,6 +170,64 @@ class MapGamepadActionToRobotAction(RobotActionProcessorStep):
         ]:
             features[PipelineFeatureType.ACTION][feat] = PolicyFeature(type=FeatureType.ACTION, shape=(1,))
         return features
+
+
+def trim_episode_buffer(dataset, threshold=0.001, padding=5):
+    """Trim idle frames from the beginning and end of the episode buffer in-place."""
+    buf = dataset.episode_buffer
+    size = buf["size"]
+    if size < 2:
+        return
+
+    # Stack actions to find movement
+    actions = np.stack(buf["action"])
+    deltas = np.diff(actions[:, :3], axis=0)
+    moving = np.abs(deltas).max(axis=1) > threshold
+
+    if not moving.any():
+        print("  Warning: no movement detected in episode, keeping as-is")
+        return
+
+    first_move = max(0, int(np.argmax(moving)) - padding)
+    last_move = min(size, int(size - 1 - np.argmax(moving[::-1])) + 1 + padding)
+    trimmed = size - (last_move - first_move)
+
+    if trimmed == 0:
+        return
+
+    # Trim all list-valued keys in the buffer
+    for key, val in buf.items():
+        if isinstance(val, list) and len(val) == size:
+            buf[key] = val[first_move:last_move]
+
+    # Reindex frame_index and timestamp
+    new_size = last_move - first_move
+    buf["size"] = new_size
+    buf["frame_index"] = list(range(new_size))
+    buf["timestamp"] = [i / dataset.fps for i in range(new_size)]
+
+    # Delete trimmed image files from disk
+    for key in dataset.meta.video_keys:
+        ep_idx = buf["episode_index"]
+        img_dir = dataset._get_image_file_dir(ep_idx, key)
+        if img_dir.exists():
+            for i in list(range(0, first_move)) + list(range(last_move, size)):
+                img_path = dataset._get_image_file_path(ep_idx, key, i)
+                if img_path.exists():
+                    img_path.unlink()
+            # Rename remaining files to match new indices
+            old_paths = sorted(img_dir.glob("*.png"))
+            for new_idx, old_path in enumerate(old_paths):
+                new_path = dataset._get_image_file_path(ep_idx, key, new_idx)
+                if old_path != new_path:
+                    old_path.rename(new_path)
+        # Update paths in buffer
+        buf[key] = [
+            str(dataset._get_image_file_path(ep_idx, key, i))
+            for i in range(new_size)
+        ]
+
+    print(f"  Trimmed {trimmed} idle frames ({size} -> {new_size})")
 
 
 def main():
@@ -341,6 +405,8 @@ def main():
                 dataset.clear_episode_buffer()
                 continue
 
+            if TRIM_IDLE:
+                trim_episode_buffer(dataset, TRIM_MOTION_THRESHOLD, TRIM_PADDING_FRAMES)
             dataset.save_episode()
             episode_idx += 1
 
