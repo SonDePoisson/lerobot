@@ -353,9 +353,7 @@ class GamepadControllerHID(InputController):
             if any(controller in device_name for controller in ["Logitech", "Xbox", "PS4", "PS5", "Stadia"]):
                 return device
 
-        logging.error(
-            "No gamepad found, check the connection and the product string in HID to add your gamepad"
-        )
+        logging.error("No gamepad found, check the connection and the product string in HID to add your gamepad")
         return None
 
     def start(self):
@@ -523,7 +521,7 @@ class GamepadControllerHID(InputController):
     def get_deltas(self):
         """Get the current movement deltas from gamepad state."""
         # Calculate deltas - invert as needed based on controller orientation
-        delta_x = -self.left_x * self.x_step_size  # Forward/backward
+        delta_x = -self.left_x * -self.x_step_size  # Forward/backward
         delta_y = -self.left_y * self.y_step_size  # Left/right
         delta_z = -self.right_y * self.z_step_size  # Up/down
 
