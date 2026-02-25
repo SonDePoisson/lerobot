@@ -497,12 +497,12 @@ class GamepadControllerHID(InputController):
         # Face buttons (byte 3)
         buttons = data[3]
 
-        # Y button (bit 3 = 8) -> SUCCESS
-        # A button (bit 6 = 64) -> FAILURE
+        # A button (bit 6 = 64) -> SUCCESS
+        # Y button (bit 3 = 8) -> FAILURE
         # X button (bit 4 = 16) -> RERECORD
-        if buttons & 8:
+        if buttons & 64:
             self.episode_end_status = TeleopEvents.SUCCESS
-        elif buttons & 64:
+        elif buttons & 8:
             self.episode_end_status = TeleopEvents.FAILURE
         elif buttons & 16:
             self.episode_end_status = TeleopEvents.RERECORD_EPISODE
