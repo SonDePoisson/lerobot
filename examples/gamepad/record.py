@@ -30,8 +30,10 @@ Usage:
 """
 
 import os
+import shutil
 import time
 from dataclasses import dataclass
+from pathlib import Path
 
 from lerobot.cameras.opencv.configuration_opencv import OpenCVCameraConfig
 from lerobot.configs.types import FeatureType, PipelineFeatureType, PolicyFeature
@@ -64,6 +66,7 @@ from lerobot.robots.so_follower.robot_kinematic_processor import (
 from lerobot.scripts.lerobot_record import record_loop
 from lerobot.teleoperators.gamepad import GamepadTeleop, GamepadTeleopConfig
 from lerobot.teleoperators.gamepad.teleop_gamepad import GripperAction
+from lerobot.teleoperators.utils import TeleopEvents
 from lerobot.utils.control_utils import init_keyboard_listener
 from lerobot.utils.utils import log_say
 from lerobot.utils.visualization_utils import init_rerun
@@ -72,9 +75,10 @@ from lerobot.utils.visualization_utils import init_rerun
 NUM_EPISODES = 5
 FPS = 30
 EPISODE_TIME_SEC = 60
-RESET_TIME_SEC = 15
+RESET_TIME_SEC = 1
 TASK_DESCRIPTION = "Pick up the white rubber and place it in the brown box"
 HF_REPO_ID = "SonDePoisson/so101_gamepad"
+RESUME = True
 
 # Initial position (degrees / 0-100 for gripper).
 # Generate with: python examples/gamepad/dump_positions.py
@@ -86,6 +90,31 @@ INITIAL_POSITION = {
     "wrist_roll.pos": 0.0,
     "gripper.pos": 0.0,
 }
+
+
+# ── Gamepad wrapper to bridge episode buttons → record_loop events ───────────
+class GamepadTeleopWithEvents(GamepadTeleop):
+    """Wraps GamepadTeleop so that A/Y/X buttons update the record_loop events dict."""
+
+    def __init__(self, config):
+        super().__init__(config)
+        self._events = None
+
+    def bind_events(self, events: dict):
+        self._events = events
+
+    def get_action(self):
+        action = super().get_action()
+        if self._events is not None:
+            teleop_events = self.get_teleop_events()
+            if teleop_events.get(TeleopEvents.SUCCESS):
+                self._events["exit_early"] = True
+            if teleop_events.get(TeleopEvents.TERMINATE_EPISODE):
+                self._events["exit_early"] = True
+            if teleop_events.get(TeleopEvents.RERECORD_EPISODE):
+                self._events["exit_early"] = True
+                self._events["rerecord_episode"] = True
+        return action
 
 
 # ── Gamepad → EE mapping (same as teleoperate.py) ────────────────────────────
@@ -157,7 +186,7 @@ def main():
     teleop_config = GamepadTeleopConfig(use_gripper=True)
 
     robot = SO101Follower(robot_config)
-    teleop = GamepadTeleop(teleop_config)
+    teleop = GamepadTeleopWithEvents(teleop_config)
 
     kinematics_solver = RobotKinematics(
         urdf_path=urdf_path,
@@ -208,26 +237,46 @@ def main():
         to_output=transition_to_observation,
     )
 
-    # ── Create dataset ────────────────────────────────────────────────────
-    dataset = LeRobotDataset.create(
-        repo_id=HF_REPO_ID,
-        fps=FPS,
-        features=combine_feature_dicts(
-            aggregate_pipeline_dataset_features(
-                pipeline=gamepad_to_ee_processor,
-                initial_features=create_initial_features(action=teleop.action_features),
-                use_videos=True,
+    # ── Create or resume dataset ─────────────────────────────────────────
+    dataset_root = Path(__file__).resolve().parent / "records" / HF_REPO_ID
+
+    if RESUME and dataset_root.exists():
+        print(f"Resuming dataset at {dataset_root}")
+        dataset = LeRobotDataset(repo_id=HF_REPO_ID, root=dataset_root)
+        dataset.start_image_writer(num_threads=4)
+        dataset.episode_buffer = dataset.create_episode_buffer()
+        print(f"  Existing episodes: {dataset.meta.total_episodes}, frames: {dataset.meta.total_frames}")
+    else:
+        if dataset_root.exists():
+            shutil.rmtree(dataset_root)
+            print(f"Removed previous dataset at {dataset_root}")
+        dataset = LeRobotDataset.create(
+            repo_id=HF_REPO_ID,
+            fps=FPS,
+            root=dataset_root,
+            features=combine_feature_dicts(
+                aggregate_pipeline_dataset_features(
+                    pipeline=gamepad_to_ee_processor,
+                    initial_features=create_initial_features(
+                        action={
+                            "delta_x": float,
+                            "delta_y": float,
+                            "delta_z": float,
+                            "gripper": float,
+                        }
+                    ),
+                    use_videos=True,
+                ),
+                aggregate_pipeline_dataset_features(
+                    pipeline=joints_to_ee_observation,
+                    initial_features=create_initial_features(observation=robot.observation_features),
+                    use_videos=True,
+                ),
             ),
-            aggregate_pipeline_dataset_features(
-                pipeline=joints_to_ee_observation,
-                initial_features=create_initial_features(observation=robot.observation_features),
-                use_videos=True,
-            ),
-        ),
-        robot_type=robot.name,
-        use_videos=True,
-        image_writer_threads=4,
-    )
+            robot_type=robot.name,
+            use_videos=True,
+            image_writer_threads=4,
+        )
 
     # ── Connect devices ───────────────────────────────────────────────────
     robot.connect()
@@ -242,13 +291,15 @@ def main():
             robot.bus.write("Operating_Mode", motor, OperatingMode.POSITION.value)
             robot.bus.write("P_Coefficient", motor, 32)
 
-    # Move to initial position
+    # Move to initial position and wait for cameras to warm up
     print("Moving to initial position...")
     robot.send_action(INITIAL_POSITION)
-    time.sleep(1.5)
+    print("Waiting for cameras to initialize...")
+    time.sleep(3.0)
 
     # Keyboard listener for fallback controls (arrow keys to exit early, etc.)
     listener, events = init_keyboard_listener()
+    teleop.bind_events(events)
     init_rerun(session_name="gamepad_record")
 
     try:
