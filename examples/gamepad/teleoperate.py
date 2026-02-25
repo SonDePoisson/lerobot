@@ -40,6 +40,7 @@ from dataclasses import dataclass
 
 from lerobot.configs.types import FeatureType, PipelineFeatureType, PolicyFeature
 from lerobot.model.kinematics import RobotKinematics
+from lerobot.motors.feetech import OperatingMode
 from lerobot.processor import (
     RobotAction,
     RobotObservation,
@@ -63,6 +64,17 @@ from lerobot.teleoperators.gamepad.teleop_gamepad import GripperAction
 from lerobot.utils.robot_utils import precise_sleep
 
 FPS = 30
+
+# Initial position to move to on startup (in degrees / 0-100 for gripper).
+# Generate these values with: python examples/gamepad/dump_positions.py
+INITIAL_POSITION = {
+    "shoulder_pan.pos": 0.0,
+    "shoulder_lift.pos": 0.0,
+    "elbow_flex.pos": 0.0,
+    "wrist_flex.pos": 90.0,
+    "wrist_roll.pos": 0.0,
+    "gripper.pos": 0.0,
+}
 
 
 @ProcessorStepRegistry.register("map_gamepad_action_to_robot_action")
@@ -120,9 +132,7 @@ class MapGamepadActionToRobotAction(RobotActionProcessorStep):
             "target_wz",
             "gripper_vel",
         ]:
-            features[PipelineFeatureType.ACTION][feat] = PolicyFeature(
-                type=FeatureType.ACTION, shape=(1,)
-            )
+            features[PipelineFeatureType.ACTION][feat] = PolicyFeature(type=FeatureType.ACTION, shape=(1,))
 
         return features
 
@@ -155,9 +165,7 @@ def main():
     motor_names = list(robot.bus.motors.keys())
 
     # Build processing pipeline: gamepad deltas -> EE pose -> joint positions
-    gamepad_to_joints_processor = RobotProcessorPipeline[
-        tuple[RobotAction, RobotObservation], RobotAction
-    ](
+    gamepad_to_joints_processor = RobotProcessorPipeline[tuple[RobotAction, RobotObservation], RobotAction](
         steps=[
             MapGamepadActionToRobotAction(),
             EEReferenceAndDelta(
@@ -187,6 +195,17 @@ def main():
 
     if not robot.is_connected or not teleop.is_connected:
         raise RuntimeError("Robot or gamepad failed to connect!")
+
+    # Increase motor torque to better counter gravity
+    with robot.bus.torque_disabled():
+        for motor in robot.bus.motors:
+            robot.bus.write("Operating_Mode", motor, OperatingMode.POSITION.value)
+            robot.bus.write("P_Coefficient", motor, 32)  # Default 32 (was 16, too weak for gravity)
+
+    # Move to initial position smoothly
+    print("Moving to initial position...")
+    robot.send_action(INITIAL_POSITION)
+    time.sleep(1.5)
 
     print("Teleoperation started. Use the Stadia gamepad to control the arm.")
     print("  Left stick  : X / Y movement")
