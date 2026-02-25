@@ -31,16 +31,18 @@ REPO_ID = "SonDePoisson/so101_gamepad"
 OUTPUT_DIR = "outputs/train/smolvla_gamepad"
 POLICY_PATH = "lerobot/smolvla_base"
 
-STEPS = 100           # Increase for real training (e.g. 20_000)
-BATCH_SIZE = 2        # Small for MPS/CPU, increase on GPU (e.g. 32-64)
-SAVE_FREQ = 100       # Save checkpoint every N steps
-LOG_FREQ = 10         # Log metrics every N steps
-NUM_WORKERS = 2       # Dataloader workers
+STEPS = 100  # Increase for real training (e.g. 20_000)
+BATCH_SIZE = 2  # Small for MPS/CPU, increase on GPU (e.g. 32-64)
+SAVE_FREQ = 100  # Save checkpoint every N steps
+LOG_FREQ = 10  # Log metrics every N steps
+NUM_WORKERS = 2  # Dataloader workers
 
 
 def main():
     cmd = [
-        sys.executable, "-m", "lerobot.scripts.lerobot_train",
+        sys.executable,
+        "-m",
+        "lerobot.scripts.lerobot_train",
         f"--policy.path={POLICY_PATH}",
         f"--dataset.repo_id={REPO_ID}",
         f"--dataset.root={DATASET_ROOT}",
