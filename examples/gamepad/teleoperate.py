@@ -83,13 +83,17 @@ class MapGamepadActionToRobotAction(RobotActionProcessorStep):
     """
     Maps gamepad delta actions to the format expected by EEReferenceAndDelta.
 
-    The gamepad outputs:
-      - delta_x, delta_y, delta_z  (floats in [-1, 1])
-      - gripper  (0=close, 1=stay, 2=open)
+    The gamepad outputs instantaneous velocity-like deltas ([-1, 1]) that return
+    to 0 when the stick is released.  EEReferenceAndDelta with use_latched_reference
+    expects **accumulated** position offsets (like the phone's absolute pose).
 
-    EEReferenceAndDelta expects:
-      - enabled, target_x, target_y, target_z, target_wx, target_wy, target_wz, gripper_vel
+    This step accumulates the gamepad deltas each frame so that the EE target
+    keeps moving while the stick is held and stays in place when released.
     """
+
+    _acc_x: float = 0.0
+    _acc_y: float = 0.0
+    _acc_z: float = 0.0
 
     def action(self, action: RobotAction) -> RobotAction:
         delta_x = float(action.pop("delta_x"))
@@ -97,13 +101,18 @@ class MapGamepadActionToRobotAction(RobotActionProcessorStep):
         delta_z = float(action.pop("delta_z"))
         gripper = int(action.pop("gripper"))
 
-        # The gamepad is always "enabled" (no enable/disable toggle like the phone)
+        # Accumulate deltas so the target position keeps moving while the
+        # stick is held and stays put when released.
+        self._acc_x += delta_x
+        self._acc_y += delta_y
+        self._acc_z += delta_z
+
         action["enabled"] = True
 
-        # Map gamepad deltas to target deltas
-        action["target_x"] = delta_x
-        action["target_y"] = delta_y
-        action["target_z"] = delta_z
+        # Send accumulated offsets (like the phone sends absolute position)
+        action["target_x"] = self._acc_x
+        action["target_y"] = self._acc_y
+        action["target_z"] = self._acc_z
 
         # No orientation control from gamepad — keep current orientation
         action["target_wx"] = 0.0
@@ -172,7 +181,7 @@ def main():
                 kinematics=kinematics_solver,
                 end_effector_step_sizes={"x": 0.01, "y": 0.01, "z": 0.01},
                 motor_names=motor_names,
-                use_latched_reference=False,
+                use_latched_reference=True,
             ),
             EEBoundsAndSafety(
                 end_effector_bounds={"min": [-1.0, -1.0, -1.0], "max": [1.0, 1.0, 1.0]},
