@@ -39,9 +39,7 @@ FPS = 30
 
 def main():
     # Initialize the robot and teleoperator
-    robot_config = SO100FollowerConfig(
-        port="/dev/tty.usbmodem5A460814411", id="my_awesome_follower_arm", use_degrees=True
-    )
+    robot_config = SO100FollowerConfig(port="/dev/tty.usbmodem5A460824501", id="so101_follower", use_degrees=True)
     teleop_config = PhoneConfig(phone_os=PhoneOS.IOS)  # or PhoneOS.ANDROID
 
     # Initialize the robot and teleoperator
@@ -56,9 +54,7 @@ def main():
     )
 
     # Build pipeline to convert phone action to ee pose action to joint action
-    phone_to_robot_joints_processor = RobotProcessorPipeline[
-        tuple[RobotAction, RobotObservation], RobotAction
-    ](
+    phone_to_robot_joints_processor = RobotProcessorPipeline[tuple[RobotAction, RobotObservation], RobotAction](
         steps=[
             MapPhoneActionToRobotAction(platform=teleop_config.phone_os),
             EEReferenceAndDelta(
