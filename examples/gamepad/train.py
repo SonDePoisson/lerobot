@@ -31,7 +31,7 @@ REPO_ID = "SonDePoisson/so101_gamepad"
 OUTPUT_DIR = "outputs/train/smolvla_gamepad"
 POLICY_PATH = "lerobot/smolvla_base"
 
-STEPS = 2000  # Quick test (increase to 10_000 for full training)
+STEPS = 10000  # Quick test (increase to 10_000 for full training)
 BATCH_SIZE = 8  # Small for MPS/CPU, increase on GPU (e.g. 32-64)
 SAVE_FREQ = 200  # Save checkpoint every N steps
 LOG_FREQ = 10  # Log metrics every N steps
