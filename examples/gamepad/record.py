@@ -69,7 +69,6 @@ from lerobot.teleoperators.gamepad.teleop_gamepad import GripperAction
 from lerobot.teleoperators.utils import TeleopEvents
 from lerobot.utils.control_utils import init_keyboard_listener
 from lerobot.utils.utils import log_say
-from lerobot.utils.visualization_utils import init_rerun
 
 # ── Configuration ─────────────────────────────────────────────────────────────
 NUM_EPISODES = 5
@@ -300,8 +299,6 @@ def main():
     # Keyboard listener for fallback controls (arrow keys to exit early, etc.)
     listener, events = init_keyboard_listener()
     teleop.bind_events(events)
-    init_rerun(session_name="gamepad_record")
-
     try:
         episode_idx = 0
         while episode_idx < NUM_EPISODES and not events["stop_recording"]:
@@ -315,7 +312,7 @@ def main():
                 dataset=dataset,
                 control_time_s=EPISODE_TIME_SEC,
                 single_task=TASK_DESCRIPTION,
-                display_data=True,
+                display_data=False,
                 teleop_action_processor=gamepad_to_ee_processor,
                 robot_action_processor=ee_to_joints_processor,
                 robot_observation_processor=joints_to_ee_observation,
@@ -331,7 +328,7 @@ def main():
                     teleop=teleop,
                     control_time_s=RESET_TIME_SEC,
                     single_task=TASK_DESCRIPTION,
-                    display_data=True,
+                    display_data=False,
                     teleop_action_processor=gamepad_to_ee_processor,
                     robot_action_processor=ee_to_joints_processor,
                     robot_observation_processor=joints_to_ee_observation,
