@@ -71,7 +71,7 @@ from lerobot.utils.control_utils import init_keyboard_listener
 from lerobot.utils.utils import log_say
 
 # ── Configuration ─────────────────────────────────────────────────────────────
-NUM_EPISODES = 5
+NUM_EPISODES = 30
 FPS = 30
 EPISODE_TIME_SEC = 60
 RESET_TIME_SEC = 1
