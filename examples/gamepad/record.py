@@ -17,16 +17,18 @@
 """
 Record episodes on an SO-101 follower arm using a Stadia gamepad.
 
+Based on the official so100_to_so100_EE example from LeRobot.
+
 Controls:
   - Left stick    : move end-effector in X/Y plane
   - Right stick Y : move end-effector in Z axis
   - L2 / R2       : close / open gripper
-  - A button      : mark episode SUCCESS  (end episode)
-  - Y button      : mark episode FAILURE  (end episode)
-  - X button      : rerecord episode
+  - A button      : mark episode SUCCESS (end episode early)
+  - Y button      : mark episode FAILURE (end episode early)
+  - X button      : re-record current episode
 
 Usage:
-  python examples/gamepad/record.py
+  SO101_PORT=/dev/tty.usbmodemXXX python examples/gamepad/record.py
 """
 
 import os
@@ -34,8 +36,6 @@ import shutil
 import time
 from dataclasses import dataclass
 from pathlib import Path
-
-import numpy as np
 
 from lerobot.cameras.opencv.configuration_opencv import OpenCVCameraConfig
 from lerobot.configs.types import FeatureType, PipelineFeatureType, PolicyFeature
@@ -73,19 +73,13 @@ from lerobot.utils.control_utils import init_keyboard_listener
 from lerobot.utils.utils import log_say
 
 # ── Configuration ─────────────────────────────────────────────────────────────
-NUM_EPISODES = 30
+NUM_EPISODES = 50
 FPS = 30
 EPISODE_TIME_SEC = 60
-RESET_TIME_SEC = 1
+RESET_TIME_SEC = 5
 TASK_DESCRIPTION = "Pick up the white rubber and place it in the brown box"
 HF_REPO_ID = "SonDePoisson/so101_gamepad"
-RESUME = True
-
-# Initial position (degrees / 0-100 for gripper).
-# Generate with: python examples/gamepad/dump_positions.py
-TRIM_IDLE = True  # Trim idle frames from beginning/end of each episode
-TRIM_MOTION_THRESHOLD = 0.001  # 1mm movement threshold
-TRIM_PADDING_FRAMES = 5  # Keep N frames before/after movement
+RESUME = False
 
 INITIAL_POSITION = {
     "shoulder_pan.pos": 0.0,
@@ -122,7 +116,7 @@ class GamepadTeleopWithEvents(GamepadTeleop):
         return action
 
 
-# ── Gamepad → EE mapping (same as teleoperate.py) ────────────────────────────
+# ── Gamepad → EE mapping ─────────────────────────────────────────────────────
 @ProcessorStepRegistry.register("map_gamepad_action_to_robot_action")
 @dataclass
 class MapGamepadActionToRobotAction(RobotActionProcessorStep):
@@ -172,69 +166,11 @@ class MapGamepadActionToRobotAction(RobotActionProcessorStep):
         return features
 
 
-def trim_episode_buffer(dataset, threshold=0.001, padding=5):
-    """Trim idle frames from the beginning and end of the episode buffer in-place."""
-    buf = dataset.episode_buffer
-    size = buf["size"]
-    if size < 2:
-        return
-
-    # Stack actions to find movement
-    actions = np.stack(buf["action"])
-    deltas = np.diff(actions[:, :3], axis=0)
-    moving = np.abs(deltas).max(axis=1) > threshold
-
-    if not moving.any():
-        print("  Warning: no movement detected in episode, keeping as-is")
-        return
-
-    first_move = max(0, int(np.argmax(moving)) - padding)
-    last_move = min(size, int(size - 1 - np.argmax(moving[::-1])) + 1 + padding)
-    trimmed = size - (last_move - first_move)
-
-    if trimmed == 0:
-        return
-
-    # Trim all list-valued keys in the buffer
-    for key, val in buf.items():
-        if isinstance(val, list) and len(val) == size:
-            buf[key] = val[first_move:last_move]
-
-    # Reindex frame_index and timestamp
-    new_size = last_move - first_move
-    buf["size"] = new_size
-    buf["frame_index"] = list(range(new_size))
-    buf["timestamp"] = [i / dataset.fps for i in range(new_size)]
-
-    # Delete trimmed image files from disk
-    for key in dataset.meta.video_keys:
-        ep_idx = buf["episode_index"]
-        img_dir = dataset._get_image_file_dir(ep_idx, key)
-        if img_dir.exists():
-            for i in list(range(0, first_move)) + list(range(last_move, size)):
-                img_path = dataset._get_image_file_path(ep_idx, key, i)
-                if img_path.exists():
-                    img_path.unlink()
-            # Rename remaining files to match new indices
-            old_paths = sorted(img_dir.glob("*.png"))
-            for new_idx, old_path in enumerate(old_paths):
-                new_path = dataset._get_image_file_path(ep_idx, key, new_idx)
-                if old_path != new_path:
-                    old_path.rename(new_path)
-        # Update paths in buffer
-        buf[key] = [
-            str(dataset._get_image_file_path(ep_idx, key, i))
-            for i in range(new_size)
-        ]
-
-    print(f"  Trimmed {trimmed} idle frames ({size} -> {new_size})")
-
-
 def main():
     port = os.environ["SO101_PORT"]
     urdf_path = "./SO101"
 
-    # ── Robot config (with camera) ────────────────────────────────────────
+    # ── Robot config ──────────────────────────────────────────────────────
     camera_config = {
         "top": OpenCVCameraConfig(index_or_path=0, width=640, height=480, fps=FPS),
         "wrist": OpenCVCameraConfig(index_or_path=1, width=640, height=480, fps=FPS),
@@ -258,7 +194,7 @@ def main():
     )
     motor_names = list(robot.bus.motors.keys())
 
-    # ── Pipeline 1: gamepad → EE pose (stored in dataset as action) ───────
+    # ── Pipeline 1: gamepad → EE pose (stored in dataset as action) ──────
     gamepad_to_ee_processor = RobotProcessorPipeline[tuple[RobotAction, RobotObservation], RobotAction](
         steps=[
             MapGamepadActionToRobotAction(),
@@ -278,7 +214,7 @@ def main():
         to_output=transition_to_robot_action,
     )
 
-    # ── Pipeline 2: EE pose → joint positions (sent to robot) ─────────────
+    # ── Pipeline 2: EE pose → joint positions (sent to robot) ────────────
     ee_to_joints_processor = RobotProcessorPipeline[tuple[RobotAction, RobotObservation], RobotAction](
         steps=[
             InverseKinematicsEEToJoints(
@@ -291,7 +227,7 @@ def main():
         to_output=transition_to_robot_action,
     )
 
-    # ── Pipeline 3: joint observation → EE observation (stored in dataset) ─
+    # ── Pipeline 3: joint observation → EE observation (stored in dataset)
     joints_to_ee_observation = RobotProcessorPipeline[RobotObservation, RobotObservation](
         steps=[
             ForwardKinematicsJointsToEE(kinematics=kinematics_solver, motor_names=motor_names),
@@ -341,32 +277,30 @@ def main():
             image_writer_threads=4,
         )
 
-    # ── Connect devices ───────────────────────────────────────────────────
+    # ── Connect devices ──────────────────────────────────────────────────
     robot.connect()
     teleop.connect()
 
     if not robot.is_connected or not teleop.is_connected:
         raise RuntimeError("Robot or gamepad failed to connect!")
 
-    # Increase motor torque to better counter gravity
     with robot.bus.torque_disabled():
         for motor in robot.bus.motors:
             robot.bus.write("Operating_Mode", motor, OperatingMode.POSITION.value)
             robot.bus.write("P_Coefficient", motor, 32)
 
-    # Move to initial position and wait for cameras to warm up
     print("Moving to initial position...")
     robot.send_action(INITIAL_POSITION)
     print("Waiting for cameras to initialize...")
     time.sleep(3.0)
 
-    # Keyboard listener for fallback controls (arrow keys to exit early, etc.)
     listener, events = init_keyboard_listener()
     teleop.bind_events(events)
+
     try:
         episode_idx = 0
         while episode_idx < NUM_EPISODES and not events["stop_recording"]:
-            log_say(f"Recording episode {episode_idx + 1} of {NUM_EPISODES}")
+            log_say(f"Recording episode {dataset.meta.total_episodes + 1}")
 
             record_loop(
                 robot=robot,
@@ -383,7 +317,9 @@ def main():
             )
 
             # Reset phase between episodes
-            if not events["stop_recording"] and (episode_idx < NUM_EPISODES - 1 or events["rerecord_episode"]):
+            if not events["stop_recording"] and (
+                episode_idx < NUM_EPISODES - 1 or events["rerecord_episode"]
+            ):
                 log_say("Reset the environment")
                 record_loop(
                     robot=robot,
@@ -405,8 +341,6 @@ def main():
                 dataset.clear_episode_buffer()
                 continue
 
-            if TRIM_IDLE:
-                trim_episode_buffer(dataset, TRIM_MOTION_THRESHOLD, TRIM_PADDING_FRAMES)
             dataset.save_episode()
             episode_idx += 1
 

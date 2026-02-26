@@ -17,27 +17,32 @@
 """
 Run a trained ACT policy on the SO-101 robot using EE-space actions.
 
-Uses async inference: a background thread runs the model and fills an action
-queue, while the main loop executes actions at a steady FPS with no idle frames.
+Based on the official so100_to_so100_EE evaluate.py example from LeRobot.
+Uses record_loop with policy inference (same as official evaluation pattern).
 
 Usage:
-  python examples/gamepad/inference_act.py
+  SO101_PORT=/dev/tty.usbmodemXXX python examples/gamepad/inference_act.py
 """
 
 import os
-import threading
 import time
-from collections import deque
-
-import torch
+from pathlib import Path
 
 from lerobot.cameras.opencv.configuration_opencv import OpenCVCameraConfig
+from lerobot.configs.types import FeatureType, PolicyFeature
+from lerobot.datasets.lerobot_dataset import LeRobotDataset
+from lerobot.datasets.pipeline_features import aggregate_pipeline_dataset_features, create_initial_features
+from lerobot.datasets.utils import combine_feature_dicts
 from lerobot.model.kinematics import RobotKinematics
 from lerobot.motors.feetech import OperatingMode
 from lerobot.policies.act.modeling_act import ACTPolicy
 from lerobot.policies.factory import make_pre_post_processors
-from lerobot.policies.utils import build_inference_frame, make_robot_action
-from lerobot.processor import RobotAction, RobotObservation, RobotProcessorPipeline
+from lerobot.processor import (
+    RobotAction,
+    RobotObservation,
+    RobotProcessorPipeline,
+    make_default_teleop_action_processor,
+)
 from lerobot.processor.converters import (
     observation_to_transition,
     robot_action_observation_to_transition,
@@ -46,18 +51,21 @@ from lerobot.processor.converters import (
 )
 from lerobot.robots.so_follower import SO101Follower, SO101FollowerConfig
 from lerobot.robots.so_follower.robot_kinematic_processor import (
-    EEBoundsAndSafety,
     ForwardKinematicsJointsToEE,
     InverseKinematicsEEToJoints,
 )
-from lerobot.utils.robot_utils import precise_sleep
+from lerobot.scripts.lerobot_record import record_loop
+from lerobot.utils.control_utils import init_keyboard_listener
+from lerobot.utils.utils import log_say
 
 # ── Configuration ─────────────────────────────────────────────────────────────
 MODEL_PATH = "outputs/train/act_gamepad/checkpoints/last/pretrained_model"
+DATASET_ROOT = str(Path(__file__).resolve().parent / "records")
+REPO_ID = "SonDePoisson/so101_gamepad"
 FPS = 30
-MAX_STEPS = 30 * 30  # 30 seconds at 30 FPS
-CHUNK_SIZE = 50  # Actions predicted per inference call
-REFILL_THRESHOLD = 10  # Request new chunk when queue drops below this
+NUM_EPISODES = 5
+EPISODE_TIME_SEC = 30
+TASK_DESCRIPTION = "Pick up the white rubber and place it in the brown box"
 
 INITIAL_POSITION = {
     "shoulder_pan.pos": 0.0,
@@ -73,28 +81,13 @@ def main():
     port = os.environ["SO101_PORT"]
     urdf_path = "./SO101"
 
-    device = torch.device(
-        "mps" if torch.backends.mps.is_available() else "cuda" if torch.cuda.is_available() else "cpu"
-    )
-    print(f"Using device: {device}")
-
     # ── Load trained model ────────────────────────────────────────────────
     print(f"Loading model from {MODEL_PATH}...")
-    model = ACTPolicy.from_pretrained(MODEL_PATH)
-    # Use raw chunk prediction (we manage the queue ourselves)
-    model.config.n_action_steps = CHUNK_SIZE
-    model.config.temporal_ensemble_coeff = None
-    model.reset()
-    model.eval()
-    model.to(device)
+    policy = ACTPolicy.from_pretrained(MODEL_PATH)
+    policy.eval()
+    print(f"Model loaded (device: {policy.config.device})")
 
-    preprocess, postprocess = make_pre_post_processors(
-        model.config,
-        MODEL_PATH,
-        preprocessor_overrides={"device_processor": {"device": str(device)}},
-    )
-
-    # ── Robot config (same as record.py) ──────────────────────────────────
+    # ── Robot config ──────────────────────────────────────────────────────
     camera_config = {
         "top": OpenCVCameraConfig(index_or_path=0, width=640, height=480, fps=FPS),
         "wrist": OpenCVCameraConfig(index_or_path=1, width=640, height=480, fps=FPS),
@@ -115,20 +108,9 @@ def main():
     )
     motor_names = list(robot.bus.motors.keys())
 
-    joints_to_ee_observation = RobotProcessorPipeline[RobotObservation, RobotObservation](
+    # ── Pipelines (same as evaluate.py) ───────────────────────────────────
+    robot_ee_to_joints = RobotProcessorPipeline[tuple[RobotAction, RobotObservation], RobotAction](
         steps=[
-            ForwardKinematicsJointsToEE(kinematics=kinematics_solver, motor_names=motor_names),
-        ],
-        to_transition=observation_to_transition,
-        to_output=transition_to_observation,
-    )
-
-    ee_to_joints_processor = RobotProcessorPipeline[tuple[RobotAction, RobotObservation], RobotAction](
-        steps=[
-            EEBoundsAndSafety(
-                end_effector_bounds={"min": [-1.0, -1.0, -1.0], "max": [1.0, 1.0, 1.0]},
-                max_ee_step_m=0.10,
-            ),
             InverseKinematicsEEToJoints(
                 kinematics=kinematics_solver,
                 motor_names=motor_names,
@@ -139,74 +121,51 @@ def main():
         to_output=transition_to_robot_action,
     )
 
-    dataset_features = {
-        "action": {
-            "dtype": "float32",
-            "shape": [7],
-            "names": ["ee.x", "ee.y", "ee.z", "ee.wx", "ee.wy", "ee.wz", "ee.gripper_pos"],
-        },
-        "observation.state": {
-            "dtype": "float32",
-            "shape": [7],
-            "names": ["ee.x", "ee.y", "ee.z", "ee.wx", "ee.wy", "ee.wz", "ee.gripper_pos"],
-        },
-        "observation.images.top": {
-            "dtype": "video",
-            "shape": [480, 640, 3],
-            "names": ["height", "width", "channels"],
-        },
-        "observation.images.wrist": {
-            "dtype": "video",
-            "shape": [480, 640, 3],
-            "names": ["height", "width", "channels"],
-        },
-    }
+    robot_joints_to_ee = RobotProcessorPipeline[RobotObservation, RobotObservation](
+        steps=[
+            ForwardKinematicsJointsToEE(kinematics=kinematics_solver, motor_names=motor_names),
+        ],
+        to_transition=observation_to_transition,
+        to_output=transition_to_observation,
+    )
 
-    # ── Async inference state ─────────────────────────────────────────────
-    action_queue = deque()  # Thread-safe for append/popleft
-    queue_lock = threading.Lock()
-    latest_obs = {"obs": None, "obs_ee": None}  # Shared observation
-    obs_lock = threading.Lock()
-    inference_requested = threading.Event()
-    stop_event = threading.Event()
+    # ── Dataset (needed for stats/features) ───────────────────────────────
+    dataset_root = Path(__file__).resolve().parent / "records" / REPO_ID
+    dataset = LeRobotDataset(repo_id=REPO_ID, root=dataset_root)
 
-    def inference_thread():
-        """Background thread: waits for a request, runs inference, fills the queue."""
-        while not stop_event.is_set():
-            inference_requested.wait(timeout=0.1)
-            if stop_event.is_set():
-                break
-            inference_requested.clear()
+    # ── Pre/post processors ───────────────────────────────────────────────
+    preprocessor, postprocessor = make_pre_post_processors(
+        policy_cfg=policy,
+        pretrained_path=MODEL_PATH,
+        dataset_stats=dataset.meta.stats,
+        preprocessor_overrides={"device_processor": {"device": str(policy.config.device)}},
+    )
 
-            # Grab the latest observation
-            with obs_lock:
-                obs_ee = latest_obs["obs_ee"]
-            if obs_ee is None:
-                continue
-
-            # Run model inference
-            obs_frame = build_inference_frame(
-                observation=obs_ee,
-                ds_features=dataset_features,
-                device=device,
-                robot_type="so_follower",
-            )
-            obs_preprocessed = preprocess(obs_frame)
-
-            # predict_action_chunk returns (1, chunk_size, action_dim)
-            with torch.no_grad():
-                actions = model.predict_action_chunk(obs_preprocessed)
-
-            # Postprocess each action and add to queue
-            new_actions = []
-            for i in range(actions.shape[1]):
-                action_tensor = postprocess(actions[:, i])
-                ee_action = make_robot_action(action_tensor, dataset_features)
-                new_actions.append(ee_action)
-
-            with queue_lock:
-                action_queue.clear()  # Replace old plan with fresh one
-                action_queue.extend(new_actions)
+    # ── Create eval dataset to record inference episodes ──────────────────
+    eval_dataset = LeRobotDataset.create(
+        repo_id=f"{REPO_ID}_eval",
+        fps=FPS,
+        features=combine_feature_dicts(
+            aggregate_pipeline_dataset_features(
+                pipeline=robot_joints_to_ee,
+                initial_features=create_initial_features(observation=robot.observation_features),
+                use_videos=True,
+            ),
+            aggregate_pipeline_dataset_features(
+                pipeline=make_default_teleop_action_processor(),
+                initial_features=create_initial_features(
+                    action={
+                        f"ee.{k}": PolicyFeature(type=FeatureType.ACTION, shape=(1,))
+                        for k in ["x", "y", "z", "wx", "wy", "wz", "gripper_pos"]
+                    }
+                ),
+                use_videos=True,
+            ),
+        ),
+        robot_type=robot.name,
+        use_videos=True,
+        image_writer_threads=4,
+    )
 
     # ── Connect robot ─────────────────────────────────────────────────────
     robot.connect()
@@ -222,81 +181,49 @@ def main():
     robot.send_action(INITIAL_POSITION)
     time.sleep(3.0)
 
-    # Start inference thread
-    inf_thread = threading.Thread(target=inference_thread, daemon=True)
-    inf_thread.start()
-
-    # Trigger first inference
-    obs = robot.get_observation()
-    obs_ee = joints_to_ee_observation(obs)
-    with obs_lock:
-        latest_obs["obs"] = obs
-        latest_obs["obs_ee"] = obs_ee
-    inference_requested.set()
-
-    # Wait for first chunk
-    print("Waiting for first action chunk...")
-    while len(action_queue) == 0 and not stop_event.is_set():
-        time.sleep(0.01)
-
-    print(f"Running async inference for {MAX_STEPS} steps ({MAX_STEPS / FPS:.1f}s). Press Ctrl+C to stop.")
+    listener, events = init_keyboard_listener()
 
     try:
-        for step in range(MAX_STEPS):
-            t0 = time.perf_counter()
+        for episode_idx in range(NUM_EPISODES):
+            log_say(f"Running inference episode {episode_idx + 1} of {NUM_EPISODES}")
 
-            # 1. Get observation (always fresh for next inference request)
-            obs = robot.get_observation()
-            obs_ee = joints_to_ee_observation(obs)
-            with obs_lock:
-                latest_obs["obs"] = obs
-                latest_obs["obs_ee"] = obs_ee
+            record_loop(
+                robot=robot,
+                events=events,
+                fps=FPS,
+                policy=policy,
+                preprocessor=preprocessor,
+                postprocessor=postprocessor,
+                dataset=eval_dataset,
+                control_time_s=EPISODE_TIME_SEC,
+                single_task=TASK_DESCRIPTION,
+                display_data=False,
+                teleop_action_processor=make_default_teleop_action_processor(),
+                robot_action_processor=robot_ee_to_joints,
+                robot_observation_processor=robot_joints_to_ee,
+            )
 
-            # 2. Request new chunk if queue is running low
-            with queue_lock:
-                queue_size = len(action_queue)
-            if queue_size <= REFILL_THRESHOLD:
-                inference_requested.set()
-
-            # 3. Pop next action from queue (or hold last position if empty)
-            with queue_lock:
-                if len(action_queue) > 0:
-                    ee_action = action_queue.popleft()
-                else:
-                    ee_action = None
-
-            if ee_action is None:
-                # Queue empty — skip this step (inference is catching up)
-                precise_sleep(max(1.0 / FPS - (time.perf_counter() - t0), 0.0))
-                if step % 30 == 0:
-                    print(f"Step {step}/{MAX_STEPS} | WAITING for inference...")
+            if events["rerecord_episode"]:
+                log_say("Re-record episode")
+                events["rerecord_episode"] = False
+                events["exit_early"] = False
+                eval_dataset.clear_episode_buffer()
                 continue
 
-            # 4. Convert EE → joints via IK
-            try:
-                joint_action = ee_to_joints_processor((ee_action, obs))
-            except ValueError as e:
-                print(f"Safety skip: {e}")
-                continue
+            eval_dataset.save_episode()
 
-            # 5. Send to robot
-            robot.send_action(joint_action)
-
-            # 6. Maintain FPS
-            precise_sleep(max(1.0 / FPS - (time.perf_counter() - t0), 0.0))
-
-            dt = time.perf_counter() - t0
-            if step % 30 == 0:
-                print(
-                    f"Step {step}/{MAX_STEPS} | dt={dt:.3f}s ({1 / dt:.1f} FPS) | queue={queue_size} | ee=({ee_action.get('ee.x', 0):.3f}, {ee_action.get('ee.y', 0):.3f}, {ee_action.get('ee.z', 0):.3f})"
-                )
+            # Move back to initial position between episodes
+            print("Resetting to initial position...")
+            robot.send_action(INITIAL_POSITION)
+            time.sleep(3.0)
 
     except KeyboardInterrupt:
         print("\nStopping inference.")
     finally:
-        stop_event.set()
-        inf_thread.join(timeout=2.0)
         robot.disconnect()
+        if listener is not None:
+            listener.stop()
+        eval_dataset.finalize()
         print("Done.")
 
 

@@ -17,6 +17,11 @@
 """
 Train ACT policy on the gamepad SO-101 dataset.
 
+Uses the default ACT hyperparameters from LeRobot:
+  - chunk_size=100, n_action_steps=100
+  - lr=1e-5, batch_size=8
+  - 100K training steps
+
 Usage:
   python examples/gamepad/train_act.py
 """
@@ -29,15 +34,14 @@ from pathlib import Path
 DATASET_ROOT = str(Path(__file__).resolve().parent / "records")
 REPO_ID = "SonDePoisson/so101_gamepad"
 OUTPUT_DIR = "outputs/train/act_gamepad"
-POLICY_TYPE = "act"
 
-STEPS = 20000
+STEPS = 100000
 BATCH_SIZE = 8
 SAVE_FREQ = 200
 LOG_FREQ = 10
 NUM_WORKERS = 2
 WANDB = True
-RESUME = True
+RESUME = False
 
 
 def main():
@@ -56,7 +60,7 @@ def main():
             sys.executable,
             "-m",
             "lerobot.scripts.lerobot_train",
-            f"--policy.type={POLICY_TYPE}",
+            f"--policy.type=act",
             f"--dataset.repo_id={REPO_ID}",
             f"--dataset.root={DATASET_ROOT}",
             f"--batch_size={BATCH_SIZE}",
@@ -67,9 +71,6 @@ def main():
             f"--output_dir={OUTPUT_DIR}",
             f"--wandb.enable={'true' if WANDB else 'false'}",
             "--policy.push_to_hub=false",
-            "--policy.chunk_size=50",
-            "--policy.n_action_steps=1",
-            "--policy.temporal_ensemble_coeff=0.01",
         ]
 
     print("Launching ACT training with command:")
