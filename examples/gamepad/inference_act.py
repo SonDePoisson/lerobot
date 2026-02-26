@@ -53,7 +53,7 @@ from lerobot.utils.robot_utils import precise_sleep
 # ── Configuration ─────────────────────────────────────────────────────────────
 MODEL_PATH = "outputs/train/act_gamepad/checkpoints/last/pretrained_model"
 FPS = 30
-MAX_STEPS = 300  # 10 seconds at 30 FPS
+MAX_STEPS = 30 * 30  # 10 seconds at 30 FPS
 
 INITIAL_POSITION = {
     "shoulder_pan.pos": 0.0,

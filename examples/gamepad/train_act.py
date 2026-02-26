@@ -66,6 +66,10 @@ def main():
             f"--num_workers={NUM_WORKERS}",
             f"--output_dir={OUTPUT_DIR}",
             f"--wandb.enable={'true' if WANDB else 'false'}",
+            "--policy.push_to_hub=false",
+            "--policy.chunk_size=50",
+            "--policy.n_action_steps=1",
+            "--policy.temporal_ensemble_coeff=0.01",
         ]
 
     print("Launching ACT training with command:")
