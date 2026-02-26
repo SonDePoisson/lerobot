@@ -15,10 +15,10 @@
 # limitations under the License.
 
 """
-Fine-tune smolVLA on the gamepad SO-101 dataset.
+Train ACT policy on the gamepad SO-101 dataset.
 
 Usage:
-  python examples/gamepad/train.py
+  python examples/gamepad/train_act.py
 """
 
 import subprocess
@@ -28,21 +28,20 @@ from pathlib import Path
 # ── Configuration ─────────────────────────────────────────────────────────────
 DATASET_ROOT = str(Path(__file__).resolve().parent / "records")
 REPO_ID = "SonDePoisson/so101_gamepad"
-OUTPUT_DIR = "outputs/train/smolvla_gamepad"
-POLICY_PATH = "lerobot/smolvla_base"
+OUTPUT_DIR = "outputs/train/act_gamepad"
+POLICY_TYPE = "act"
 
-STEPS = 10000  # Quick test (increase to 10_000 for full training)
-BATCH_SIZE = 8  # Small for MPS/CPU, increase on GPU (e.g. 32-64)
-SAVE_FREQ = 200  # Save checkpoint every N steps
-LOG_FREQ = 10  # Log metrics every N steps
-NUM_WORKERS = 2  # Dataloader workers
-WANDB = True  # Enable Weights & Biases for training curves
-RESUME = True  # Set True to resume from last checkpoint (update STEPS to new total)
+STEPS = 2000
+BATCH_SIZE = 8
+SAVE_FREQ = 200
+LOG_FREQ = 10
+NUM_WORKERS = 2
+WANDB = True
+RESUME = False
 
 
 def main():
     if RESUME:
-        # Resume from last checkpoint — just pass config_path + new steps
         config_path = str(Path(OUTPUT_DIR) / "checkpoints" / "last" / "pretrained_model" / "train_config.json")
         cmd = [
             sys.executable,
@@ -57,23 +56,19 @@ def main():
             sys.executable,
             "-m",
             "lerobot.scripts.lerobot_train",
-            f"--policy.path={POLICY_PATH}",
+            f"--policy.type={POLICY_TYPE}",
             f"--dataset.repo_id={REPO_ID}",
             f"--dataset.root={DATASET_ROOT}",
             f"--batch_size={BATCH_SIZE}",
             f"--steps={STEPS}",
             f"--save_freq={SAVE_FREQ}",
-            f"--eval_freq={SAVE_FREQ}",
             f"--log_freq={LOG_FREQ}",
             f"--num_workers={NUM_WORKERS}",
             f"--output_dir={OUTPUT_DIR}",
-            "--policy.push_to_hub=false",
             f"--wandb.enable={'true' if WANDB else 'false'}",
-            '--rename_map={"observation.images.top": "observation.images.camera1", "observation.images.wrist": "observation.images.camera2"}',
-            "--policy.empty_cameras=1",
         ]
 
-    print("Launching training with command:")
+    print("Launching ACT training with command:")
     print(" ".join(cmd))
     print()
 

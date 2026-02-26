@@ -166,7 +166,7 @@ def main():
     with robot.bus.torque_disabled():
         for motor in robot.bus.motors:
             robot.bus.write("Operating_Mode", motor, OperatingMode.POSITION.value)
-            robot.bus.write("P_Coefficient", motor, 32)
+            robot.bus.write("P_Coefficient", motor, 16)
 
     print("Moving to initial position...")
     robot.send_action(INITIAL_POSITION)
