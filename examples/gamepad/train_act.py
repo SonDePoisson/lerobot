@@ -31,13 +31,13 @@ REPO_ID = "SonDePoisson/so101_gamepad"
 OUTPUT_DIR = "outputs/train/act_gamepad"
 POLICY_TYPE = "act"
 
-STEPS = 2000
+STEPS = 20000
 BATCH_SIZE = 8
 SAVE_FREQ = 200
 LOG_FREQ = 10
 NUM_WORKERS = 2
 WANDB = True
-RESUME = False
+RESUME = True
 
 
 def main():
