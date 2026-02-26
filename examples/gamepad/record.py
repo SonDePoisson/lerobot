@@ -28,7 +28,7 @@ Controls:
   - X button      : re-record current episode
 
 Usage:
-  SO101_PORT=/dev/tty.usbmodemXXX python examples/gamepad/record.py
+    python examples/gamepad/record.py
 """
 
 import os
@@ -73,10 +73,10 @@ from lerobot.utils.control_utils import init_keyboard_listener
 from lerobot.utils.utils import log_say
 
 # ── Configuration ─────────────────────────────────────────────────────────────
-NUM_EPISODES = 50
+NUM_EPISODES = 10
 FPS = 30
 EPISODE_TIME_SEC = 60
-RESET_TIME_SEC = 5
+RESET_TIME_SEC = 1
 TASK_DESCRIPTION = "Pick up the white rubber and place it in the brown box"
 HF_REPO_ID = "SonDePoisson/so101_gamepad"
 RESUME = False
@@ -317,9 +317,7 @@ def main():
             )
 
             # Reset phase between episodes
-            if not events["stop_recording"] and (
-                episode_idx < NUM_EPISODES - 1 or events["rerecord_episode"]
-            ):
+            if not events["stop_recording"] and (episode_idx < NUM_EPISODES - 1 or events["rerecord_episode"]):
                 log_say("Reset the environment")
                 record_loop(
                     robot=robot,
