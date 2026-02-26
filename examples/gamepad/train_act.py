@@ -31,15 +31,15 @@ import sys
 from pathlib import Path
 
 # ── Configuration ─────────────────────────────────────────────────────────────
-DATASET_ROOT = str(Path(__file__).resolve().parent / "records")
+DATASET_ROOT = str(Path(__file__).resolve().parent / "records" / "SonDePoisson" / "so101_gamepad")
 REPO_ID = "SonDePoisson/so101_gamepad"
 OUTPUT_DIR = "outputs/train/act_gamepad"
 
-STEPS = 100000
+STEPS = 2000
 BATCH_SIZE = 8
 SAVE_FREQ = 200
 LOG_FREQ = 10
-NUM_WORKERS = 2
+NUM_WORKERS = 8
 WANDB = True
 RESUME = False
 
@@ -60,7 +60,7 @@ def main():
             sys.executable,
             "-m",
             "lerobot.scripts.lerobot_train",
-            f"--policy.type=act",
+            "--policy.type=act",
             f"--dataset.repo_id={REPO_ID}",
             f"--dataset.root={DATASET_ROOT}",
             f"--batch_size={BATCH_SIZE}",

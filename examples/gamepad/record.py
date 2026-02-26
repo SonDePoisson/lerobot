@@ -73,13 +73,13 @@ from lerobot.utils.control_utils import init_keyboard_listener
 from lerobot.utils.utils import log_say
 
 # ── Configuration ─────────────────────────────────────────────────────────────
-NUM_EPISODES = 10
+NUM_EPISODES = 45
 FPS = 30
 EPISODE_TIME_SEC = 60
 RESET_TIME_SEC = 1
 TASK_DESCRIPTION = "Pick up the white rubber and place it in the brown box"
 HF_REPO_ID = "SonDePoisson/so101_gamepad"
-RESUME = False
+RESUME = True
 
 INITIAL_POSITION = {
     "shoulder_pan.pos": 0.0,
