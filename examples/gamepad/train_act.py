@@ -26,6 +26,7 @@ Usage:
   python examples/gamepad/train_act.py
 """
 
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -35,16 +36,20 @@ DATASET_ROOT = str(Path(__file__).resolve().parent / "records" / "SonDePoisson" 
 REPO_ID = "SonDePoisson/so101_gamepad"
 OUTPUT_DIR = "outputs/train/act_gamepad"
 
-STEPS = 2000
+STEPS = 50000
 BATCH_SIZE = 8
 SAVE_FREQ = 200
 LOG_FREQ = 10
 NUM_WORKERS = 8
 WANDB = True
-RESUME = False
+RESUME = True
 
 
 def main():
+    wandb_cache = str(Path(OUTPUT_DIR) / "wandb")
+    os.makedirs(wandb_cache, exist_ok=True)
+    os.environ["WANDB_CACHE_DIR"] = wandb_cache
+
     if RESUME:
         config_path = str(Path(OUTPUT_DIR) / "checkpoints" / "last" / "pretrained_model" / "train_config.json")
         cmd = [

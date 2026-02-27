@@ -60,8 +60,7 @@ from lerobot.robots.so_follower.robot_kinematic_processor import (
 )
 from lerobot.utils.constants import HF_LEROBOT_HOME
 from lerobot.utils.control_utils import init_keyboard_listener, predict_action
-from lerobot.utils.robot_utils import get_safe_torch_device
-from lerobot.utils.utils import log_say
+from lerobot.utils.utils import get_safe_torch_device, log_say
 
 # ── Configuration ─────────────────────────────────────────────────────────────
 MODEL_PATH = "outputs/train/act_gamepad/checkpoints/last/pretrained_model"
@@ -152,16 +151,15 @@ def main():
 
     # ── Create eval dataset ───────────────────────────────────────────────
     eval_repo_id = f"{REPO_ID}_eval"
-    for eval_path in [
-        Path(__file__).resolve().parent / "records" / eval_repo_id,
-        HF_LEROBOT_HOME / eval_repo_id,
-    ]:
+    eval_root = Path(__file__).resolve().parent / "records" / eval_repo_id
+    for eval_path in [eval_root, HF_LEROBOT_HOME / eval_repo_id]:
         if eval_path.exists():
             shutil.rmtree(eval_path)
             print(f"Removed previous eval dataset at {eval_path}")
 
     eval_dataset = LeRobotDataset.create(
         repo_id=eval_repo_id,
+        root=eval_root,
         fps=FPS,
         features=combine_feature_dicts(
             aggregate_pipeline_dataset_features(
@@ -245,17 +243,37 @@ def main():
     try:
         for episode_idx in range(NUM_EPISODES):
             log_say(f"Running inference episode {episode_idx + 1} of {NUM_EPISODES}")
+            time.sleep(1.0)  # Let the announcement finish
 
             # Reset state for this episode
             policy.reset()
             preprocessor.reset()
             postprocessor.reset()
-            latest_action = None
+            with lock:
+                latest_action = None
+                inference_obs = None
+            inference_ready.clear()
+            inference_done.clear()
             stop_inference.clear()
+            events["exit_early"] = False
 
             # Start inference thread
             worker = threading.Thread(target=inference_worker, daemon=True)
             worker.start()
+
+            # Get first observation and wait for first inference before starting the loop
+            obs = robot.get_observation()
+            obs_processed = robot_joints_to_ee(obs)
+            observation_frame = build_dataset_frame(
+                eval_dataset.features, obs_processed, prefix=OBS_STR
+            )
+            with lock:
+                inference_obs = observation_frame
+            inference_ready.set()
+
+            print("Waiting for first inference...")
+            inference_done.wait(timeout=5.0)
+            inference_done.clear()
 
             timestamp = 0
             start_episode_t = time.perf_counter()
@@ -281,7 +299,7 @@ def main():
                     inference_obs = observation_frame
                 inference_ready.set()
 
-                # 4. If we have an action, send it to the robot
+                # 4. Get latest action and send to robot
                 with lock:
                     current_action = latest_action
 
@@ -296,10 +314,6 @@ def main():
                     )
                     frame = {**observation_frame, **action_frame, "task": TASK_DESCRIPTION}
                     eval_dataset.add_frame(frame)
-                else:
-                    # First frame: wait for initial inference to complete
-                    inference_done.wait(timeout=2.0)
-                    inference_done.clear()
 
                 # 5. Rate limiting
                 dt_s = time.perf_counter() - start_loop_t
@@ -321,11 +335,13 @@ def main():
                 continue
 
             eval_dataset.save_episode()
+            print(f"Episode {episode_idx + 1} saved.")
 
             # Move back to initial position between episodes
-            print("Resetting to initial position...")
-            robot.send_action(INITIAL_POSITION)
-            time.sleep(3.0)
+            if episode_idx < NUM_EPISODES - 1:
+                print("Resetting to initial position...")
+                robot.send_action(INITIAL_POSITION)
+                time.sleep(3.0)
 
     except KeyboardInterrupt:
         print("\nStopping inference.")
